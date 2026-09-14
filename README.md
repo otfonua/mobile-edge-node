@@ -6,9 +6,11 @@ The node ingests serial data from microcontrollers over USB OTG, spools every
 frame to local storage so nothing is lost when the uplink drops, and forwards
 telemetry to a workstation over a Tailscale (WireGuard) mesh.
 
-**Status: scaffold.** The design and the Android hardening guide are written.
-The ingestion daemon, spooler, forwarder, and test suite are being built next.
-Sections below marked *planned* describe intent, not verified behavior.
+**Status: core pipeline working, hardware bring-up next.** Framing, the
+SQLite spool, the forwarder, the base receiver, and the serial ingest daemon
+are implemented and covered by tests that run without hardware. Edge DSP and
+the control API are not written yet. Sections marked *planned* describe
+intent, not verified behavior.
 
 ## Why a tablet
 
@@ -27,10 +29,11 @@ costs less used than a Raspberry Pi kit with equivalent peripherals.
                |  USB OTG, CDC-ACM serial (115200 to 921600 baud)
                v
 [ EDGE ]    Galaxy Tab S7, Termux
-            1. serial ingestion daemon           src/ingest_serial.py   (planned)
-            2. SQLite WAL spool, zero-drop        src/spool.py           (planned)
-            3. decimation / RMS / trigger detect  src/edge_dsp.py        (planned)
-            4. forwarder over Tailscale           src/telemetry_bridge.py (planned)
+            1. serial ingestion daemon           src/ingest_serial.py
+            2. frame parser, CRC-16, resync       src/framing.py
+            3. SQLite WAL spool, zero-drop        src/spool.py
+            4. decimation / RMS / trigger detect  src/edge_dsp.py        (planned)
+            5. forwarder over Tailscale           src/telemetry_bridge.py
                |  opportunistic, resumes after link loss
                v
 [ BASE ]    workstation: base_receiver.py -> MATLAB / Python
@@ -40,27 +43,54 @@ See [docs/design.md](docs/design.md) for the full design and
 [docs/android_hardening.md](docs/android_hardening.md) for keeping a
 long-running process alive on Android.
 
-## Quickstart (planned)
+## Quickstart
 
 ```bash
-# on the tablet, inside Termux
-scripts/setup_termux_env.sh
-python3 src/ingest_serial.py --port /dev/ttyACM0 --baud 115200 --spool spool/field.db
+# on the tablet, inside Termux (first time only)
+bash scripts/setup_termux_env.sh
 
-# on the workstation
-python3 src/base_receiver.py --listen 0.0.0.0:9000
+# on the tablet: ingest from the microcontroller into the spool
+termux-usb -l
+termux-usb -r /dev/bus/usb/001/002
+termux-usb -e "python3 -m src.ingest_serial --fd --spool spool/field.db" /dev/bus/usb/001/002
+#   (Linux / rooted Android: python3 -m src.ingest_serial --port /dev/ttyACM0 --baud 115200)
+
+# on the workstation: receive and write CSV
+python3 -m src.base_receiver --listen 0.0.0.0:9000 --out field.csv
+
+# on the tablet: forward the spool to the workstation over the tailnet
+python3 -m src.telemetry_bridge --spool spool/field.db --host <workstation tailnet IP>
 ```
 
-## Verification (planned)
+The microcontroller side sends the frame format in `src/framing.py`: a
+2-byte sync, sequence number, microsecond timestamp, length, payload, and a
+CRC-16/CCITT-FALSE. A reference RP2040 sender is *planned*.
+
+## Verification
 
 ```bash
-pytest tests/ -v
+pip install -r requirements.txt
+pytest -v
 python3 scripts/test_loopback.py --rate 100 --duration 5
 ```
 
-The loopback test runs on any machine without hardware: it generates frames,
-severs the forwarder mid-stream, and checks that the spool drains in order
-with no gaps and no duplicates after reconnect.
+Both run on any machine with no hardware attached. The test suite covers
+frame parsing under arbitrary chunking, corrupt-frame isolation, spool
+durability across reopen, and an end-to-end drain while the TCP link is cut
+repeatedly. The loopback script generates frames at a set rate through a
+simulated serial stream with injected corruption, severs the link every
+second, and passes only if every valid frame reaches the receiver exactly
+once and in order. Sample run:
+
+```text
+generated      800
+corrupted      8  (parser rejected 8)
+valid spooled  792
+received       792  duplicates dropped 0
+link cuts      3
+pending left   0
+RESULT         PASS
+```
 
 ## Hardware
 

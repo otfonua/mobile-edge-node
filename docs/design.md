@@ -112,19 +112,22 @@ mobile-edge-node/
 │   ├── android_hardening.md       wake lock, phantom process killer, USB OTG
 │   └── benchmarks.md              power, runtime, latency (once measured)
 ├── src/
-│   ├── ingest_serial.py           USB serial reader and WAL spooler
-│   ├── spool.py                   SQLite spool: append, drain, ack
-│   ├── edge_dsp.py                decimation, RMS, trigger detect
-│   ├── telemetry_bridge.py        forwarder over Tailscale
-│   ├── control_api.py             REST / WebSocket control plane
-│   └── base_receiver.py           workstation listener
+│   ├── framing.py                 frame format, CRC-16, streaming parser
+│   ├── spool.py                   SQLite WAL spool: append, drain, ack
+│   ├── protocol.py                node <-> base wire format (JSON lines, acks)
+│   ├── ingest_serial.py           USB serial (pyserial or termux-usb fd) -> spool
+│   ├── telemetry_bridge.py        forwarder over Tailscale with reconnect
+│   ├── base_receiver.py           workstation listener, CSV sink, dedupe
+│   ├── edge_dsp.py                decimation, RMS, trigger detect   (planned)
+│   └── control_api.py             REST / WebSocket control plane     (planned)
 ├── scripts/
 │   ├── setup_termux_env.sh        provision Termux
 │   └── test_loopback.py           end-to-end without hardware
 └── tests/
-    ├── test_spool.py              zero loss across link drops, ordering, no dupes
-    ├── test_framing.py            packet boundaries and checksums
-    └── test_control_api.py        status query, config validation, 422s
+    ├── test_framing.py            chunking, resync, CRC and length corruption
+    ├── test_spool.py              order, ack prefix, durability across reopen
+    ├── test_bridge.py             drain across repeated link cuts, no dupes
+    └── test_control_api.py        status query, config validation, 422s (planned)
 ```
 
 ## 6. Verification

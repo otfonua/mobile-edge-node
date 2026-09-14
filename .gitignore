@@ -1,0 +1,32 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+
+# Telemetry data and spool databases
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+data/
+spool/
+
+# Logs
+*.log
+logs/
+
+# Local config (Tailscale IPs, device paths, tokens)
+config.local.*
+.env
+
+# Editors / OS
+.DS_Store
+.obsidian/
+.idea/
+.vscode/

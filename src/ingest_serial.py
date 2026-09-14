@@ -70,6 +70,7 @@ def main(argv=None) -> int:
     ap.add_argument("--baud", type=int, default=115200)
     ap.add_argument("--spool", default="spool/field.db")
     ap.add_argument("--chunk", type=int, default=4096)
+    ap.add_argument("--max-frames", type=int, default=0, help="stop after N frames (0 = run forever)")
     ap.add_argument("-v", "--verbose", action="store_true")
     args, rest = ap.parse_known_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
@@ -88,7 +89,7 @@ def main(argv=None) -> int:
     parser = FrameParser()
     log.info("ingesting into %s", args.spool)
     try:
-        ingest(dev, spool, parser, chunk=args.chunk)
+        ingest(dev, spool, parser, chunk=args.chunk, max_frames=args.max_frames)
     except KeyboardInterrupt:
         pass
     finally:

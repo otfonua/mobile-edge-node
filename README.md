@@ -74,7 +74,8 @@ pytest -v
 python3 scripts/test_loopback.py --rate 100 --duration 5
 ```
 
-Both run on any machine with no hardware attached. The test suite covers
+Both run on any machine with no hardware attached, and both have been run
+on the tablet itself (Termux, Python 3.14, aarch64) and on macOS. The test suite covers
 frame parsing under arbitrary chunking, corrupt-frame isolation, spool
 durability across reopen, and an end-to-end drain while the TCP link is cut
 repeatedly. The loopback script generates frames at a set rate through a

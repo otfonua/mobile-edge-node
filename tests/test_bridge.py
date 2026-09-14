@@ -1,42 +1,44 @@
 """End-to-end: spool -> forwarder -> TCP -> receiver, with the link cut mid-stream."""
 import socket
+import socketserver
 import threading
 import time
 
-from src.base_receiver import Receiver, ReceiverServer
+from src.base_receiver import Receiver, ReceiverServer, _Handler
 from src.framing import Frame
 from src.spool import Spool
 from src.telemetry_bridge import Forwarder
 
 
-class KillableServer(ReceiverServer):
-    """Receiver whose live connections can be severed on demand."""
+class _CuttingHandler(_Handler):
+    """Drops the connection instead of acking, for the first N flushes."""
 
-    def __init__(self, addr, receiver):
-        super().__init__(addr, receiver)
-        self.conns = []
-        self.conn_lock = threading.Lock()
-
-    def process_request(self, request, client_address):
-        with self.conn_lock:
-            self.conns.append(request)
-        super().process_request(request, client_address)
-
-    def sever_all(self):
-        with self.conn_lock:
-            for c in self.conns:
-                try:
-                    c.shutdown(socket.SHUT_RDWR)
-                    c.close()
-                except OSError:
-                    pass
-            self.conns.clear()
+    def handle(self):
+        srv = self.server
+        recv = srv.receiver
+        for line in self.rfile:
+            if b'"flush"' in line and srv.cuts_remaining > 0:
+                srv.cuts_remaining -= 1
+                srv.cuts_done += 1
+                return  # close without ack: forwarder must resend this batch
+            reply = recv.handle_line(line)
+            if reply:
+                self.wfile.write(reply)
+                self.wfile.flush()
 
 
-def start_server():
+class CuttingServer(ReceiverServer):
+    def __init__(self, addr, receiver, cuts):
+        socketserver.ThreadingTCPServer.__init__(self, addr, _CuttingHandler)
+        self.receiver = receiver
+        self.cuts_remaining = cuts
+        self.cuts_done = 0
+
+
+def start_server(cuts):
     got = []
     recv = Receiver(sink=got.append)
-    srv = KillableServer(("127.0.0.1", 0), recv)
+    srv = CuttingServer(("127.0.0.1", 0), recv, cuts)
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
     return srv, recv, got
@@ -52,7 +54,11 @@ def wait_until(pred, timeout=10.0, step=0.01):
 
 
 def test_drain_with_repeated_link_cuts(tmp_path):
-    srv, recv, got = start_server()
+    """Receiver drops the link on the first 5 flushes: batches were delivered but
+    never acked, so the forwarder must reconnect and resend, and the receiver
+    must drop the duplicates. Final sink content must be exact."""
+    cuts = 5
+    srv, recv, got = start_server(cuts)
     spool = Spool(str(tmp_path / "s.db"))
     total = 2000
     spool.append_many(Frame(i, i * 100, i.to_bytes(4, "little")) for i in range(total))
@@ -61,13 +67,6 @@ def test_drain_with_repeated_link_cuts(tmp_path):
                     backoff_min=0.01, backoff_max=0.05)
     ft = threading.Thread(target=fwd.run, daemon=True)
     ft.start()
-
-    # Sever the link several times while it is draining.
-    cuts = 0
-    while recv.records < total * 0.8 and cuts < 6:
-        time.sleep(0.03)
-        srv.sever_all()
-        cuts += 1
 
     assert wait_until(lambda: spool.pending_count() == 0), fwd.stats()
     fwd.stop()
@@ -78,8 +77,9 @@ def test_drain_with_repeated_link_cuts(tmp_path):
     ids = [m["id"] for m in got]
     assert ids == list(range(1, total + 1)), "gaps or reordering after reconnect"
     assert recv.records == total
-    assert fwd.reconnects >= 1, "test did not actually cut the link"
-    # duplicates are allowed on the wire but must not reach the sink
+    assert srv.cuts_done == cuts
+    assert fwd.reconnects >= cuts
+    assert recv.duplicates >= cuts * 64 - 64, "resent batches should have been deduped"
     assert len(set(ids)) == len(ids)
 
 
